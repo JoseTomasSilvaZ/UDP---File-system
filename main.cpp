@@ -90,6 +90,7 @@ public:
                     fs::path dirPath = fs::current_path() / fileName;
                     try {
                         fs::remove_all(dirPath);
+
                         
                     } catch (fs::filesystem_error& e) {
                         cout << e.what() << endl;
@@ -102,7 +103,12 @@ public:
                         cout << e.what() << endl;
                     }
                 }
-                return;
+                for (auto &child : childs) {
+                    if (child->name == fileName) {
+                        childs.erase(remove(childs.begin(), childs.end(), child), childs.end());
+                        return;
+                    }
+                }
             }
         }
         cout << "File not found." << endl;
@@ -121,6 +127,7 @@ public:
             cout << e.what() << endl;
         }
         auto createdNode = make_unique<Inodes>(dirName, true);
+        createdNode->setPadre(this);
         childs.push_back(move(createdNode));
     }
 
