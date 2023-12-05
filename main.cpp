@@ -8,6 +8,8 @@
 #include <iostream>
 #include <map>
 #include <sstream>
+#include <iomanip>
+#include <chrono>
 
 using namespace std;
 namespace fs = std::filesystem;
@@ -25,22 +27,50 @@ vector<string> split(const string& str, char delimiter) {
 void pwd() {
     cout << "Current path: " << fs::current_path() << endl;
 }
+
+
+fs::perms translatePerms(int octalPerms) {
+    fs::perms resultPerms = fs::perms::none;
+
+    // Descompone el número octal en dígitos para propietario, grupo y otros
+    int ownerPerms = (octalPerms / 100) % 10;
+    int groupPerms = (octalPerms / 10) % 10;
+    int othersPerms = octalPerms % 10;
+
+    // Función auxiliar para obtener los permisos específicos
+    auto getPerms = [](int perms, fs::perms read, fs::perms write, fs::perms exec) {
+        fs::perms result = fs::perms::none;
+        if (perms & 4) result |= read;
+        if (perms & 2) result |= write;
+        if (perms & 1) result |= exec;
+        return result;
+    };
+
+    // Aplica los permisos para propietario, grupo y otros
+    resultPerms |= getPerms(ownerPerms, fs::perms::owner_read, fs::perms::owner_write, fs::perms::owner_exec);
+    resultPerms |= getPerms(groupPerms, fs::perms::group_read, fs::perms::group_write, fs::perms::group_exec);
+    resultPerms |= getPerms(othersPerms, fs::perms::others_read, fs::perms::others_write, fs::perms::others_exec);
+
+    return resultPerms;
+}
+
 void man() {
     map <string, string> commands;
-    commands["ls"] = "List files in current directory";
-    commands["cd"] = "Change directory";
-    commands["mkdir"] = "Create directory";
-    commands["touch"] = "Create file";
-    commands["rm"] = "Remove file or directory";
+    commands["ls"] = "List files in current directory"; //ok
+    commands["ls -l"] = "List files including metadata";
+    commands["cd"] = "Change directory";    // ok
+    commands["mkdir"] = "Create directory"; //ok
+    commands["touch"] = "Create file"; //ok
+    commands["rm"] = "Remove file or directory"; //ok
     commands["mv"] = "Move file or directory";
-    commands["cp"] = "Copy file or directory";
-    commands["chmod"] = "Change permissions of file or directory";
-    commands["pwd"] = "Show abs path";
-    cout << "\n\n --------------" << "List of commands" << "--------------" << endl;
+    commands["chmod"] = "Change permissions of file or directory"; //ok
+    commands["pwd"] = "Show abs path"; //ok
+    commands["rn"] = "Rename file or directory"; //ok
+    commands["meta"] = "Show metadata of file or directory"; //ok
+    cout << "\n --------------" << "List of commands" << "--------------" << endl;
     for (auto &command : commands) {
         cout << command.first << " - " << command.second << endl;
     }
-    cout << "\n\n";
 }
 
 class Inodes {
@@ -52,8 +82,6 @@ private:
     string permissions;
 
 
-    
-
 public:
     Inodes(string name, bool isDirectory) : name(name), isDirectory(isDirectory), parent(nullptr) {
         if (isDirectory) {
@@ -63,19 +91,69 @@ public:
         }
     }
 
-    void ls() const {
-        cout << "Listing files ~" << endl;
-        for (const auto& child : childs) {
+    void ls(string showMeta="") const {
+        cout << "\n";
+        if(showMeta == "-l"){
+            for (const auto &child : childs)
+            {
+                
+                child->meta(child->name);
+            }
+            cout << "\n";
+            return;
+        }
+        for (const auto &child : childs)
+        {
             string type = child->isDirectory ? "@Directory" : "@File";
            
             cout << type << ": " << child->name << endl;
-            
         }
+
     }
 
     string getName() {
         return this->name;
     }
+
+   void meta(string fileName) {
+    fs::path filePath = fs::current_path() / fileName;
+
+    try {
+        if (!fs::exists(filePath)) {
+            cout << "File does not exist." << endl;
+            return;
+        }
+
+        auto permissions = fs::status(filePath).permissions();
+        cout << ((permissions & fs::perms::owner_read) != fs::perms::none ? "r" : "-")
+             << ((permissions & fs::perms::owner_write) != fs::perms::none ? "w" : "-")
+             << ((permissions & fs::perms::owner_exec) != fs::perms::none ? "x" : "-");
+        cout << ((permissions & fs::perms::group_read) != fs::perms::none ? "r" : "-")
+             << ((permissions & fs::perms::group_write) != fs::perms::none ? "w" : "-")
+             << ((permissions & fs::perms::group_exec) != fs::perms::none ? "x" : "-");
+        cout << ((permissions & fs::perms::others_read) != fs::perms::none ? "r" : "-")
+             << ((permissions & fs::perms::others_write) != fs::perms::none ? "w" : "-")
+             << ((permissions & fs::perms::others_exec) != fs::perms::none ? "x" : "-");
+
+        if (fs::is_directory(filePath)) {
+            cout << " Directory";
+        } else {
+            auto fileSize = fs::file_size(filePath);
+            cout << " " << fileSize << " bytes";
+        }
+
+        // Mostrar fecha de última modificación
+        auto ftime = fs::last_write_time(filePath);
+        auto sctp = std::chrono::time_point_cast<std::chrono::system_clock::duration>(ftime - fs::file_time_type::clock::now() + std::chrono::system_clock::now());
+        std::time_t cftime = std::chrono::system_clock::to_time_t(sctp);
+        cout << " " << std::put_time(std::localtime(&cftime), "%F %T") << " last mod.";
+        cout<<" " << fileName << endl;
+    } catch (const fs::filesystem_error &e) {
+        cout << "Error retrieving file metadata: " << e.what() << endl;
+    }
+}
+
+
 
     void rm(string fileName) {
         for (const auto& child : childs) {
@@ -113,6 +191,21 @@ public:
         }
         cout << "File not found." << endl;
     }
+
+    void chmod(string fileName, int permissions){
+        for (const auto& child : childs) {
+            if (child->name == fileName) {
+                fs::path filePath = fs::current_path() / fileName;
+                try {
+                    fs::perms newPermissions = translatePerms(permissions);
+                    fs::permissions(filePath, newPermissions);
+                } catch (fs::filesystem_error& e) {
+                    cout << e.what() << endl;
+                }
+            }
+        }
+    }
+
     void mkdir(string dirName) {
         for (const auto& child : childs) {
             if (child->name == dirName) {
@@ -127,7 +220,7 @@ public:
             cout << e.what() << endl;
         }
         auto createdNode = make_unique<Inodes>(dirName, true);
-        createdNode->setPadre(this);
+        createdNode->setParentNode(this);
         childs.push_back(move(createdNode));
     }
 
@@ -151,14 +244,13 @@ public:
 
             // Agregar el nodo al árbol
             auto createdNode = make_unique<Inodes>(fileName, false);
-            createdNode->setPadre(this);
+            createdNode->setParentNode(this);
             childs.push_back(move(createdNode));
             cout << "File created: " << fileName << endl;
         }
 
-    void setPadre(Inodes *p)
+    void setParentNode(Inodes *p)
     {
-        cout << "Setting parent node" << p << endl;
         this->parent = p;
     }
 
@@ -170,29 +262,21 @@ public:
 
 Inodes *cd(string directoryName) {
     if(directoryName == ".."){
-        cout << "inside .." <<  this->parent << endl;
         if(this->parent){
-            cout<< "efectively has parent : " << this->parent->name<< endl;
             fs::current_path("../");
         }
-        // fs::current_path(parent ? parent->name : "./playground");
-
         return parent ? this->parent : this;
     }
-    cout << "not .." << endl;
   for (const auto &child : childs)
 {
-    cout << "inside children searching" << endl;
     if (child->isDirectory && child->name == directoryName)
     {
-        cout << child.get()->name << " children found" << endl;
         fs::current_path(child->name);
         return child.get();
     }
 }
 
-// Si el directorio no se encuentra en ninguno de los hijos, entonces regresar this
-cout << "children not found" << endl;
+cout << "Folder not found" << endl;
 return this;
 }
 
@@ -215,8 +299,9 @@ void rn (string prevName, string newName) {
 
 string createPlaygroundFolder() {
     string playgroundPath = "./playground";
-
-    if (!fs::exists(playgroundPath)) {
+    cout << "Checking if ./playground folder exists... ---> ";
+    if (!fs::exists(playgroundPath))
+    {
         if (fs::create_directory(playgroundPath))
         {
             cout << "'playground' directory created" << endl;
@@ -225,7 +310,9 @@ string createPlaygroundFolder() {
         {
             cout << "Error creating 'playground' directory" << endl;
         }
-    } else {
+    }
+    else
+    {
         cout << "'playground' directory already exists" << endl;
     }
 
@@ -236,14 +323,9 @@ void loadData(Inodes *node, const fs::path &path){
     for (const auto &entry : fs::directory_iterator(path))
     {
         const auto &filePath = entry.path();
-        // cout << filePath << endl;
         bool isDirectory = fs::is_directory(filePath);
-        cout<< "isDirectory: " << isDirectory << endl;
-        // cout << filePath.filename().string() << "fname" << endl;
         auto createdNode = make_unique<Inodes>(filePath.filename().string(), isDirectory);
-        cout<< "created node" << endl;
-        // cout << "Creating parent node of "<< filePath.filename().string() << "parent: " << node->getName() << endl;
-        createdNode->setPadre(node);
+        createdNode->setParentNode(node);
         if (isDirectory)
         {
             loadData(createdNode.get(), filePath);
@@ -254,7 +336,12 @@ void loadData(Inodes *node, const fs::path &path){
 
 void handleCommandInput(Inodes*& currentNode, Inodes* rootNode, vector<string>input){
     if(input[0] == "ls") {
-        currentNode->ls();
+        if(input.size() > 1) {
+
+        currentNode->ls(input[1]);
+        } else {
+            currentNode->ls();
+        }
     }
     if(input[0] == "man"){
         man();
@@ -263,7 +350,6 @@ void handleCommandInput(Inodes*& currentNode, Inodes* rootNode, vector<string>in
         if(input[1] != ""){
             currentNode = currentNode->cd(input[1]);
         }
-        cout<< "path changed: " <<  fs::current_path() << endl;
     }
     if(input[0] == "mkdir"){
         currentNode->mkdir(input[1]);
@@ -281,7 +367,29 @@ void handleCommandInput(Inodes*& currentNode, Inodes* rootNode, vector<string>in
         currentNode->rn(input[1], input[2]);
     
     }
-    
+    if(input[0] == "chmod"){
+        currentNode->chmod(input[2], stoi(input[1]));
+    }
+
+    if(input[0] == "meta"){
+        currentNode->meta(input[1]);
+    }
+}
+
+void printCurrentPath(){
+    vector<string> path = split(fs::current_path(), '/');
+    bool printWord = false;
+    cout << "\n🐱/";
+    for (auto &word : path)
+    {
+    if(word == "playground"){
+        printWord = true;
+    }
+    if(printWord){
+        cout << word << "/";
+    }
+}
+cout << "$ ";
 }
 
 int main () {
@@ -295,12 +403,14 @@ int main () {
     string command;
     bool handleInput = true;
 
-    cout<< "Type 'man' to see the list of commands" << endl;
-    cout<< "In order to have a controlled workspace, you cant go further behind than the playground folder. But u can do wathever u want inside ./playground" << endl;
-    while(handleInput){
-        cout << "🐱/" << current->getName() << "/$ ";
+    cout << "To maintain a controlled workspace, you are not allowed to go beyond the 'playground' folder. However, you can do whatever you want inside './playground'. \n" << endl;
+    cout<< "Type 'man' to see the list of commands \n" << endl;
+  
+
+    while (handleInput)
+    {
+        printCurrentPath();
         getline(cin, command);
-        cout << "command: " << command << endl;
         vector<string> input = split(command, ' ');
         
         if(input.size() > 3) {
@@ -317,8 +427,8 @@ int main () {
         
         handleCommandInput(current, rootNode, input);
     }
-   
-    cout << "\n\n😸✨ See u later" << endl;
+
+    cout << "\n😸✨ See u later" << endl;
 
 
     return 0;
